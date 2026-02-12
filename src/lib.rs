@@ -7,6 +7,7 @@ use rand::RngCore; // For fill_bytes
 use argon2::Argon2;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
+use secrecy::{SecretString, ExposeSecret};
 
 /// The size of the salt in bytes. 16 bytes is a standard recommendation.
 const SALT_LEN: usize = 16;
@@ -55,7 +56,16 @@ impl Vault {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VaultEntry {
     pub username: String,
-    pub password: String,
+    #[serde(serialize_with = "serialize_secret")]
+    pub password: SecretString,
+}
+
+fn serialize_secret<S>(secret: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::Serialize;
+    secret.expose_secret().serialize(serializer)
 }
 
 /// Metadata required to derive the key and decrypt the payload.
@@ -111,10 +121,7 @@ mod hex_serde {
 /// # Arguments
 /// * `password` - The user's master password.
 /// * `salt` - A random 16-byte salt.
-pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, VaultError> {
-    // Zeroize the password wrapper if we were passing it around, but here it's a slice reference.
-    // The caller is responsible for zeroizing the password string memory if possible.
-    
+pub fn derive_key(password: &SecretString, salt: &[u8]) -> Result<Key<Aes256Gcm>, VaultError> {
     // Argon2 config: Default is robust, but we can tune it if needed.
     // Default params (m=4096, t=3, p=1) are generally good for interactive use.
     let argon2 = Argon2::default();
@@ -123,7 +130,7 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, VaultEr
     let mut key_material = [0u8; 32];
     
     argon2
-        .hash_password_into(password.as_bytes(), salt, &mut key_material)
+        .hash_password_into(password.expose_secret().as_bytes(), salt, &mut key_material)
         .map_err(|_| VaultError::KeyDerivationError)?;
         
     let key = *Key::<Aes256Gcm>::from_slice(&key_material);
@@ -132,9 +139,6 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, VaultEr
     // `Key` from aes-gcm doesn't auto-zeroize on drop by default without `zeroize` feature + wrapper,
     // but we can at least explicit zeroize our buffer. 
     key_material.zeroize();
-    
-    // Note: The `Key` type in `aes-gcm` effectively wraps `GenericArray`. 
-    // Ideally we wrap this in a type that implements ZeroizeOnDrop for best practices.
     
     Ok(key)
 }
@@ -145,7 +149,7 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, VaultEr
 /// - **Confidentiality**: AES-256 is the industry standard for symmetric encryption.
 /// - **Integrity**: GCM (Galois/Counter Mode) allows us to verify that the data hasn't been tampered with.
 /// - **Random Nonce**: We generate a new random nonce for every encryption to prevent replay attacks.
-pub fn encrypt(data: &[u8], password: &str) -> Result<Vault, VaultError> {
+pub fn encrypt(data: &[u8], password: &SecretString) -> Result<Vault, VaultError> {
     // 1. Generate a random salt
     let mut salt = [0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt);
@@ -177,7 +181,7 @@ pub fn encrypt(data: &[u8], password: &str) -> Result<Vault, VaultError> {
 /// Decrypts a Vault.
 /// 
 /// Returns `VaultError::DecryptionError` if the password is wrong or the file is corrupted/tampered.
-pub fn decrypt(vault: &Vault, password: &str) -> Result<Vec<u8>, VaultError> {
+pub fn decrypt(vault: &Vault, password: &SecretString) -> Result<Vec<u8>, VaultError> {
     // 1. Derive key using the *stored* salt
     let key = derive_key(password, &vault.header.salt)?;
     
@@ -192,12 +196,13 @@ pub fn decrypt(vault: &Vault, password: &str) -> Result<Vec<u8>, VaultError> {
     Ok(plaintext)
 }
 
-pub fn generate_password(length: usize) -> String {
+pub fn generate_password(length: usize) -> SecretString {
     use rand::distributions::Distribution;
     let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
     let mut rng = rand::thread_rng();
     let dist = rand::distributions::Slice::new(charset).unwrap();
-    (0..length)
+    let s: String = (0..length)
         .map(|_| *dist.sample(&mut rng) as char)
-        .collect()
+        .collect();
+    SecretString::from(s)
 }

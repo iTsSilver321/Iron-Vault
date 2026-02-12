@@ -3,10 +3,11 @@ use iron_vault::{encrypt, Vault};
 use std::path::Path;
 use std::time::Duration;
 use std::thread;
-use std::io::{self, Write};
+use std::io;
 use arboard::Clipboard;
 use colored::*;
 use inquire::{Text, Password, Select, Confirm};
+use secrecy::{SecretString, ExposeSecret};
 
 const VAULT_FILE: &str = "vault.json";
 
@@ -119,18 +120,18 @@ fn main() {
 
             println!("Initializing new vault.");
             println!("Enter Master Password:");
-            let password = rpassword::read_password().unwrap_or_else(|e| {
+            let password = SecretString::from(rpassword::read_password().unwrap_or_else(|e| {
                 eprintln!("Error reading password: {}", e);
                 std::process::exit(1);
-            });
+            }));
             
             println!("Confirm Master Password:");
-            let confirm = rpassword::read_password().unwrap_or_else(|e| {
+            let confirm = SecretString::from(rpassword::read_password().unwrap_or_else(|e| {
                 eprintln!("Error reading password: {}", e);
                 std::process::exit(1);
-            });
+            }));
 
-            if password != confirm {
+            if password.expose_secret() != confirm.expose_secret() {
                 eprintln!("Error: Passwords do not match.");
                 std::process::exit(1);
             }
@@ -180,13 +181,13 @@ fn main() {
             };
 
             let password = match password {
-                Some(p) => p.clone(),
-                None => Password::new("Password:")
+                Some(p) => SecretString::from(p.clone()),
+                None => SecretString::from(Password::new("Password:")
                     .with_display_mode(inquire::PasswordDisplayMode::Masked)
                     .with_custom_confirmation_message("Confirm Password:")
                     .with_custom_confirmation_error_message("Passwords do not match")
                     .prompt()
-                    .unwrap_or_else(|_| std::process::exit(1)),
+                    .unwrap_or_else(|_| std::process::exit(1))),
             };
 
             // 1. Load the vault
@@ -201,10 +202,10 @@ fn main() {
 
             // 2. Prompt for master password
             println!("Enter Master Password:");
-            let master_password = rpassword::read_password().unwrap_or_else(|e| {
+            let master_password = SecretString::from(rpassword::read_password().unwrap_or_else(|e| {
                 eprintln!("Error reading password: {}", e);
                 std::process::exit(1);
-            });
+            }));
 
             // 3. Decrypt
             let decrypted_bytes = iron_vault::decrypt(&vault, &master_password).unwrap_or_else(|_| {
@@ -251,11 +252,11 @@ fn main() {
             });
 
             println!("{}", "Enter Master Password:".yellow());
-            let master_password = Password::new("Master Password:")
+            let master_password = SecretString::from(Password::new("Master Password:")
                 .without_confirmation()
                 .with_display_mode(inquire::PasswordDisplayMode::Masked)
                 .prompt()
-                .unwrap_or_else(|_| std::process::exit(1));
+                .unwrap_or_else(|_| std::process::exit(1)));
 
             let decrypted_bytes = iron_vault::decrypt(&vault, &master_password).unwrap_or_else(|_| {
                 eprintln!("{}", "Error: Access Denied. Wrong password or corrupted vault.".red().bold());
@@ -287,9 +288,9 @@ fn main() {
                     
                     match Clipboard::new() {
                         Ok(mut clipboard) => {
-                            if let Err(e) = clipboard.set_text(&entry.password) {
+                            if let Err(e) = clipboard.set_text(entry.password.expose_secret()) {
                                 eprintln!("{}", format!("Error copying to clipboard: {}", e).red());
-                                println!("Password: {}", entry.password); // Fallback
+                                println!("Password: {}", entry.password.expose_secret()); // Fallback
                             } else {
                                 println!("{}", "Password copied to clipboard!".green().bold());
                                 println!("{}", "Clearing in 60 seconds...".yellow());
@@ -303,7 +304,7 @@ fn main() {
                         }
                         Err(e) => {
                             eprintln!("{}", format!("Error initializing clipboard: {}", e).red());
-                            println!("Password: {}", entry.password); // Fallback
+                            println!("Password: {}", entry.password.expose_secret()); // Fallback
                         }
                     }
                 }
@@ -323,11 +324,11 @@ fn main() {
             });
 
             println!("{}", "Enter Master Password:".yellow());
-            let master_password = Password::new("Master Password:")
+            let master_password = SecretString::from(Password::new("Master Password:")
                 .without_confirmation()
                 .with_display_mode(inquire::PasswordDisplayMode::Masked)
                 .prompt()
-                .unwrap_or_else(|_| std::process::exit(1));
+                .unwrap_or_else(|_| std::process::exit(1)));
 
             let decrypted_bytes = iron_vault::decrypt(&vault, &master_password).unwrap_or_else(|_| {
                 eprintln!("{}", "Error: Access Denied. Wrong password or corrupted vault.".red().bold());
@@ -388,11 +389,11 @@ fn main() {
             });
 
             println!("{}", "Enter Master Password:".yellow());
-             let master_password = Password::new("Master Password:")
+             let master_password = SecretString::from(Password::new("Master Password:")
                 .without_confirmation()
                 .with_display_mode(inquire::PasswordDisplayMode::Masked)
                 .prompt()
-                .unwrap_or_else(|_| std::process::exit(1));
+                .unwrap_or_else(|_| std::process::exit(1)));
 
             let decrypted_bytes = iron_vault::decrypt(&vault, &master_password).unwrap_or_else(|_| {
                 eprintln!("{}", "Error: Access Denied. Wrong password or corrupted vault.".red().bold());
@@ -422,9 +423,9 @@ fn main() {
             
             match Clipboard::new() {
                 Ok(mut clipboard) => {
-                    if let Err(e) = clipboard.set_text(&password) {
+                    if let Err(e) = clipboard.set_text(password.expose_secret()) {
                         eprintln!("{}", format!("Error copying to clipboard: {}", e).red());
-                        println!("Password: {}", password); // Fallback
+                        println!("Password: {}", password.expose_secret()); // Fallback
                     } else {
                         println!("{}", "Password copied to clipboard!".green().bold());
                         println!("{}", "Clearing in 60 seconds...".yellow());
@@ -438,7 +439,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("{}", format!("Error initializing clipboard: {}", e).red());
-                    println!("Password: {}", password); // Fallback
+                    println!("Password: {}", password.expose_secret()); // Fallback
                 }
             }
         }
